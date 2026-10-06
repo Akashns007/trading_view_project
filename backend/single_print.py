@@ -39,52 +39,18 @@ def assign_tpo_letter(candle_time: time) -> Optional[str]:
     return None
 
 
-def calculate_single_prints(df: pd.DataFrame, target_date: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Analyzes intraday candle data.
-    Finds the requested date's (or yesterday's) 30-min brackets,
-    computes single prints, and determines if current price has tested/filled them.
-    """
-    if df.empty or len(df) < 5:
-        return {"zones": [], "yesterday_date": None, "brackets": [], "available_dates": []}
+def _calculate_zones_for_session(session_df: pd.DataFrame, test_df: pd.DataFrame, session_date: str) -> List[Dict[str, Any]]:
+    if session_df.empty or len(session_df) < 5:
+        return []
 
-    df = df.copy()
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
+    session_df = session_df.copy()
+    session_df["time"] = session_df.index.time
+    session_df["bracket"] = session_df["time"].apply(assign_tpo_letter)
 
-    # Group by trading date
-    df["date"] = df.index.date
-    unique_dates = sorted(df["date"].unique())
-    available_date_strs = [str(d) for d in reversed(unique_dates)]
-
-    # Determine which date to analyze
-    today_date = unique_dates[-1]
-    if target_date:
-        matched = [d for d in unique_dates if str(d) == target_date]
-        if matched:
-            selected_date = matched[0]
-        else:
-            selected_date = unique_dates[-2] if len(unique_dates) > 1 else unique_dates[0]
-    else:
-        # Default to previous session (yesterday)
-        selected_date = unique_dates[-2] if len(unique_dates) > 1 else unique_dates[0]
-
-    yesterday_df = df[df["date"] == selected_date]
-    today_df = df[df["date"] == today_date]
-
-    if yesterday_df.empty:
-        return {"zones": [], "yesterday_date": str(selected_date), "brackets": [], "available_dates": available_date_strs}
-
-    # Assign bracket to each candle in yesterday's session
-    yesterday_df = yesterday_df.copy()
-    yesterday_df["time"] = yesterday_df.index.time
-    yesterday_df["bracket"] = yesterday_df["time"].apply(assign_tpo_letter)
-
-    # Compute high, low, open, close per bracket
     bracket_summary = []
     for bracket in TPO_BRACKETS:
         letter = bracket["letter"]
-        b_df = yesterday_df[yesterday_df["bracket"] == letter]
+        b_df = session_df[session_df["bracket"] == letter]
         if not b_df.empty:
             b_high = float(b_df["High"].max())
             b_low = float(b_df["Low"].min())
@@ -101,52 +67,36 @@ def calculate_single_prints(df: pd.DataFrame, target_date: Optional[str] = None)
             })
 
     if len(bracket_summary) < 2:
-        return {"zones": [], "yesterday_date": str(yesterday_date), "brackets": bracket_summary}
+        return []
 
-    session_min = float(yesterday_df["Low"].min())
-    session_max = float(yesterday_df["High"].max())
-
-    # Step size for price discretization
+    session_min = float(session_df["Low"].min())
+    session_max = float(session_df["High"].max())
     price_range = session_max - session_min
     if price_range <= 0:
-        return {"zones": [], "yesterday_date": str(yesterday_date), "brackets": bracket_summary}
+        return []
 
-    # Use reasonable resolution (approx 150-250 price bins)
     num_bins = 200
     step = price_range / num_bins
     price_levels = [session_min + i * step for i in range(num_bins + 1)]
 
-    # For each price level, record which brackets traded at this price
     level_brackets = []
     for p in price_levels:
         active = [b["letter"] for b in bracket_summary if b["low"] <= p <= b["high"]]
         level_brackets.append(active)
 
-    # Identify contiguous blocks where exactly ONE bracket traded (Single Prints)
     raw_zones = []
     current_zone = None
-
     for i, (p, brackets) in enumerate(zip(price_levels, level_brackets)):
         if len(brackets) == 1:
             letter = brackets[0]
             if current_zone is None:
-                current_zone = {
-                    "low": p,
-                    "high": p + step,
-                    "bracket": letter,
-                    "count": 1
-                }
+                current_zone = {"low": p, "high": p + step, "bracket": letter, "count": 1}
             elif current_zone["bracket"] == letter:
                 current_zone["high"] = p + step
                 current_zone["count"] += 1
             else:
                 raw_zones.append(current_zone)
-                current_zone = {
-                    "low": p,
-                    "high": p + step,
-                    "bracket": letter,
-                    "count": 1
-                }
+                current_zone = {"low": p, "high": p + step, "bracket": letter, "count": 1}
         else:
             if current_zone is not None:
                 raw_zones.append(current_zone)
@@ -155,19 +105,19 @@ def calculate_single_prints(df: pd.DataFrame, target_date: Optional[str] = None)
     if current_zone is not None:
         raw_zones.append(current_zone)
 
-    # Filter out tiny noise (require at least 2 consecutive price bins)
     meaningful_zones = [z for z in raw_zones if z["count"] >= 2]
-
-    # Classify as Buying vs Selling Single Print
     bracket_dict = {b["letter"]: b for b in bracket_summary}
     classified_zones = []
+
+    session_start_ts = int(session_df.index[0].timestamp())
+    session_end_ts = int(session_df.index[-1].timestamp())
+
+    test_low = float(test_df["Low"].min()) if not test_df.empty else None
+    test_high = float(test_df["High"].max()) if not test_df.empty else None
 
     for idx, zone in enumerate(meaningful_zones):
         b_info = bracket_dict.get(zone["bracket"])
         zone_mid = (zone["low"] + zone["high"]) / 2
-
-        # Buying Single Print: Price surged upward leaving single prints below
-        # Selling Single Print: Price collapsed downward leaving single prints above
         if b_info and b_info["close"] >= b_info["open"]:
             sp_type = "BUYING"
             role = "Support Zone (Bullish Defense)"
@@ -179,24 +129,19 @@ def calculate_single_prints(df: pd.DataFrame, target_date: Optional[str] = None)
             color = "rgba(239, 83, 80, 0.25)"
             border_color = "#ef5350"
 
-        # Check today's price action against this single print zone
-        today_low = float(today_df["Low"].min()) if not today_df.empty else None
-        today_high = float(today_df["High"].max()) if not today_df.empty else None
         status = "UNFILLED (Active)"
-
-        if today_low is not None and today_high is not None:
-            if today_high >= zone["high"] and today_low <= zone["low"]:
+        if test_low is not None and test_high is not None:
+            if test_high >= zone["high"] and test_low <= zone["low"]:
                 status = "FULLY FILLED (Mitigated)"
-            elif (today_low <= zone["high"] and today_low >= zone["low"]) or \
-                 (today_high >= zone["low"] and today_high <= zone["high"]):
+            elif (test_low <= zone["high"] and test_low >= zone["low"]) or (test_high >= zone["low"] and test_high <= zone["high"]):
                 status = "TESTING / PARTIALLY FILLED"
-            elif today_low > zone["high"]:
+            elif test_low > zone["high"]:
                 status = "UNTESTED (Price Above)"
-            elif today_high < zone["low"]:
+            elif test_high < zone["low"]:
                 status = "UNTESTED (Price Below)"
 
         classified_zones.append({
-            "id": f"sp-{idx+1}",
+            "id": f"sp-{session_date}-{idx+1}",
             "bracket": zone["bracket"],
             "low": round(zone["low"], 2),
             "high": round(zone["high"], 2),
@@ -207,17 +152,65 @@ def calculate_single_prints(df: pd.DataFrame, target_date: Optional[str] = None)
             "status": status,
             "color": color,
             "borderColor": border_color,
-            "date": str(selected_date),
+            "date": session_date,
+            "startTime": session_start_ts,
+            "endTime": session_end_ts,
             "bracketTime": f"{b_info['start']} - {b_info['end']}" if b_info else ""
         })
+
+    return classified_zones
+
+
+def calculate_single_prints(df: pd.DataFrame, target_date: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Analyzes intraday candle data.
+    Computes single prints for all sessions and specifically classifies the selected target session.
+    """
+    if df.empty or len(df) < 5:
+        return {"zones": [], "yesterday_date": None, "brackets": [], "available_dates": [], "all_zones": []}
+
+    df = df.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    # Group by trading date
+    df["date"] = df.index.date
+    unique_dates = sorted(df["date"].unique())
+    available_date_strs = [str(d) for d in reversed(unique_dates)]
+
+    today_date = unique_dates[-1]
+    if target_date:
+        matched = [d for d in unique_dates if str(d) == target_date]
+        selected_date = matched[0] if matched else (unique_dates[-2] if len(unique_dates) > 1 else unique_dates[0])
+    else:
+        selected_date = unique_dates[-2] if len(unique_dates) > 1 else unique_dates[0]
+
+    all_zones = []
+    daily_map: Dict[str, List[Dict[str, Any]]] = {}
+
+    for i, d in enumerate(unique_dates):
+        d_str = str(d)
+        session_df = df[df["date"] == d]
+        # Test against subsequent days
+        after_df = df[df["date"] > d]
+        day_zones = _calculate_zones_for_session(session_df, after_df, d_str)
+        daily_map[d_str] = day_zones
+        all_zones.extend(day_zones)
+
+    selected_zones = daily_map.get(str(selected_date), [])
+
+    selected_df = df[df["date"] == selected_date]
+    session_max = float(selected_df["High"].max()) if not selected_df.empty else 0.0
+    session_min = float(selected_df["Low"].min()) if not selected_df.empty else 0.0
 
     return {
         "yesterday_date": str(selected_date),
         "selected_date": str(selected_date),
         "today_date": str(today_date),
         "available_dates": available_date_strs,
-        "zones": classified_zones,
-        "brackets": bracket_summary,
+        "zones": selected_zones,
+        "all_zones": all_zones,
         "yesterday_high": round(session_max, 2),
         "yesterday_low": round(session_min, 2)
     }
+

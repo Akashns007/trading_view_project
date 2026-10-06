@@ -52,3 +52,51 @@ export function Breadcrumb({ parent, current, onParent }: { parent: string; curr
 export const formatNumber = (value: number | null | undefined, decimals = 0) => value === null || value === undefined || Number.isNaN(value) ? '—' : new Intl.NumberFormat('en-IN', { maximumFractionDigits: decimals, minimumFractionDigits: decimals }).format(value)
 export const formatPrice = (value: number | null | undefined) => value === null || value === undefined || Number.isNaN(value) ? '—' : `₹${formatNumber(value, 2)}`
 export const compactNumber = (value: number | null | undefined) => value === null || value === undefined ? '—' : new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+
+export function CircularProgress({
+  value,
+  max = 100,
+  size = 130,
+  strokeWidth = 10,
+  label = 'available'
+}: {
+  value: number
+  max?: number
+  size?: number
+  strokeWidth?: number
+  label?: string
+}) {
+  const percentage = Math.min(Math.max(Math.round((value / (max || 1)) * 100), 0), 100)
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const strokeDashoffset = circumference - (percentage / 100) * circumference
+
+  return (
+    <div className="circular-progress-wrap" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="circular-progress-svg">
+        <circle
+          className="progress-circle-bg"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          strokeWidth={strokeWidth}
+        />
+        <circle
+          className="progress-circle-bar"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          strokeWidth={strokeWidth}
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+        />
+      </svg>
+      <div className="circular-progress-content">
+        <strong>{percentage}%</strong>
+        <small>{label}</small>
+      </div>
+    </div>
+  )
+}
+

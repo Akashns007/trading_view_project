@@ -76,6 +76,7 @@ export function Profile({
   const [showBelow, setShowBelow] = useState(false)
   const [showCurrent, setShowCurrent] = useState(true)
   const [showSinglePrints, setShowSinglePrints] = useState(true)
+  const [timeRange, setTimeRange] = useState<'1D' | '5D'>('1D')
 
   if (loading) return <div className="profile-page"><Breadcrumb parent="Scanner" current="Loading profile" onParent={onBack} /><LoadingState label="Loading previous-open levels" /></div>
   if (error) return <div className="profile-page"><Breadcrumb parent="Scanner" current="Profile" onParent={onBack} /><ErrorState message={error} retry={retry} /></div>
@@ -167,8 +168,28 @@ export function Profile({
         <SectionHeading
           eyebrow={`TRADINGVIEW CHART / REFERENCE SESSION ${activeDate}`}
           title="Price Action with Clean Single Prints Overlays"
-          detail="Interactive candlestick chart. Choose visible overlays below (clean single print levels enabled by default)."
-          action={liveState.updatedAt && <span className="updated-at"><Waves size={14} />Updated {liveState.updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+          detail="Interactive candlestick chart. Showing 1-day single session by default to avoid multi-day clutter."
+          action={
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div className="chart-range-picker">
+                <button
+                  className={`chart-range-btn ${timeRange === '1D' ? 'active' : ''}`}
+                  onClick={() => setTimeRange('1D')}
+                  title="Show only 1 day of intraday price action (Clean view)"
+                >
+                  1 Day (Default)
+                </button>
+                <button
+                  className={`chart-range-btn ${timeRange === '5D' ? 'active' : ''}`}
+                  onClick={() => setTimeRange('5D')}
+                  title="Show 5 days / 1 week of historical price action"
+                >
+                  5 Days / 1 Week
+                </button>
+              </div>
+              {liveState.updatedAt && <span className="updated-at"><Waves size={14} />Updated {liveState.updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+            </div>
+          }
         />
 
         {/* Clean Chart Toggles */}
@@ -199,6 +220,7 @@ export function Profile({
           <IntradayChart
             series={profile.priceSeries}
             profile={profile}
+            timeRange={timeRange}
             showOpen={showOpen}
             showAbove={showAbove}
             showBelow={showBelow}
@@ -270,16 +292,21 @@ export function Profile({
           <div className="levels-table">
             <div className="levels-header"><span>PRICE</span><span>VOLUME</span><span>SHARE</span></div>
             {highest.length ? (
-              highest.map((level) => (
-                <div className="level-row" key={level.price}>
-                  <span><b>{formatPrice(level.price)}</b>{level.price === open && <em>OPEN</em>}</span>
-                  <span><strong>{compactNumber(level.volume)}</strong><small>{formatNumber(level.tradeCount)} trades</small></span>
-                  <span className="level-bar-wrap">
-                    <i style={{ width: `${Math.max((level.volume / Math.max(highest[0].volume, 1)) * 100, 4)}%` }} />
-                    <small>{levelShare(level)}</small>
-                  </span>
-                </div>
-              ))
+              highest.map((level) => {
+                const sharePct = level.volumePercent ?? (profile.totalVolume > 0 ? (level.volume / profile.totalVolume) * 100 : 0)
+                return (
+                  <div className="level-row" key={level.price}>
+                    <span><b>{formatPrice(level.price)}</b>{level.price === open && <em>OPEN</em>}</span>
+                    <span><strong>{compactNumber(level.volume)}</strong><small>{formatNumber(level.tradeCount)} trades</small></span>
+                    <span className="level-bar-wrap">
+                      <div className="level-bar-track">
+                        <i className="level-bar-fill" style={{ width: `${Math.min(Math.max(sharePct, 2), 100)}%` }} />
+                      </div>
+                      <small>{levelShare(level)}</small>
+                    </span>
+                  </div>
+                )
+              })
             ) : (
               <EmptyState title="No price levels" detail="There are no trades for this profile." />
             )}
@@ -289,3 +316,4 @@ export function Profile({
     </div>
   )
 }
+

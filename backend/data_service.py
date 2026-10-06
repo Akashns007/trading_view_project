@@ -122,6 +122,7 @@ def format_candles_for_lightweight_charts(df: pd.DataFrame) -> List[Dict[str, An
 
         candles.append({
             "time": ts,
+            "date": dt.strftime("%Y-%m-%d"),
             "open": round(o, 2),
             "high": round(h, 2),
             "low": round(l, 2),

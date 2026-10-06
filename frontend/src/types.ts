@@ -114,6 +114,7 @@ export interface ScannerResponse {
 
 export interface CandleData {
   time: number
+  date?: string
   open: number
   high: number
   low: number
@@ -134,6 +135,8 @@ export interface SinglePrintZone {
   color: string
   borderColor: string
   date: string
+  startTime?: number
+  endTime?: number
   bracketTime: string
 }
 
@@ -143,9 +146,11 @@ export interface VolumeProfile extends ScannerRow {
   priceSeries: PricePoint[]
   candles?: CandleData[]
   singlePrints?: SinglePrintZone[]
+  allSinglePrints?: SinglePrintZone[]
   availableDates?: string[]
   selectedDate?: string
 }
+
 
 export type SortField = 'pointGap' | 'gapPercent' | 'hvtpVolume' | 'symbol' | 'previousOpen' | 'hvtp' | 'signedGap' | 'currentPrice' | 'currentVsHvtp' | 'totalVolume' | 'aboveVolume' | 'belowVolume'
 export interface ScannerFilters {

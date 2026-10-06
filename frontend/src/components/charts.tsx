@@ -19,7 +19,8 @@ import {
   CrosshairMode,
   IChartApi,
   CandlestickSeries,
-  HistogramSeries
+  HistogramSeries,
+  LineSeries
 } from 'lightweight-charts'
 import type { PricePoint, VolumeLevel, VolumeProfile } from '../types'
 import { compactNumber, formatNumber, formatPrice } from './ui'
@@ -96,10 +97,12 @@ export function VolumeProfileChart({ profile }: { profile: VolumeProfile }) {
 
 /**
  * Interactive TradingView Candlestick + Volume + Single Prints & Volume Level overlays
+ * Defaults to 1 Day (Single Session) with bounded single print overlays.
  */
 export function IntradayChart({
   series = [],
   profile,
+  timeRange = '1D',
   showOpen = true,
   showAbove = true,
   showBelow = true,
@@ -108,6 +111,7 @@ export function IntradayChart({
 }: {
   series?: PricePoint[]
   profile: VolumeProfile
+  timeRange?: '1D' | '5D'
   showOpen?: boolean
   showAbove?: boolean
   showBelow?: boolean
@@ -165,21 +169,34 @@ export function IntradayChart({
     chartInstanceRef.current = chart
 
     // Prepare candles
-    let candleData = profile.candles || []
-    if (!candleData.length && series.length > 0) {
-      // Synthesize 5-min candles from priceSeries if raw candles aren't pre-populated
+    let rawCandles = profile.candles || []
+    if (!rawCandles.length && series.length > 0) {
       const nowTs = Math.floor(Date.now() / 1000) - series.length * 300
-      candleData = series.map((pt, i) => {
+      rawCandles = series.map((pt, i) => {
         const p = pt.price
         return {
           time: (nowTs + i * 300) as any,
           open: p,
-          high: Math.round((p * 1.002) * 100) / 100,
-          low: Math.round((p * 0.998) * 100) / 100,
+          high: Math.round(p * 1.002 * 100) / 100,
+          low: Math.round(p * 0.998 * 100) / 100,
           close: p,
           volume: pt.volume || 1000
         }
       })
+    }
+
+    const activeDate = profile.selectedDate || profile.previousSessionDate || profile.date
+
+    // Filter candle data if 1D mode is active (default)
+    let candleData = rawCandles
+    if (timeRange === '1D' && rawCandles.length > 0) {
+      const dayFiltered = rawCandles.filter((c) => c.date === activeDate)
+      if (dayFiltered.length > 0) {
+        candleData = dayFiltered
+      } else {
+        const lastDate = rawCandles[rawCandles.length - 1].date
+        candleData = rawCandles.filter((c) => c.date === lastDate)
+      }
     }
 
     if (candleData.length > 0) {
@@ -271,32 +288,70 @@ export function IntradayChart({
         })
       }
 
-      // Overlays: Single Prints Zones for Selected Session
-      if (showSinglePrints && profile.singlePrints && profile.singlePrints.length > 0) {
-        profile.singlePrints.forEach((sp) => {
+      // Overlays: Single Prints (Bounded strictly to the session day so lines cut cleanly!)
+      if (showSinglePrints) {
+        const zonesToDraw = timeRange === '5D' && profile.allSinglePrints?.length
+          ? profile.allSinglePrints
+          : (profile.singlePrints || [])
+
+        zonesToDraw.forEach((sp) => {
           const isBuying = sp.type === 'BUYING'
           const spColor = isBuying ? '#26a69a' : '#ef5350'
           const roleShort = isBuying ? 'Supp' : 'Res'
 
-          // Top boundary line with single clean label
-          candleSeries.createPriceLine({
-            price: sp.high,
-            color: spColor,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: `SP [${sp.bracket}] ${roleShort} ₹${sp.low.toFixed(1)}-${sp.high.toFixed(1)}`
-          })
+          const dayCandles = rawCandles.filter((c) => c.date === sp.date)
+          const startTs = sp.startTime || (dayCandles.length ? dayCandles[0].time : candleData[0].time)
+          const endTs = sp.endTime || (dayCandles.length ? dayCandles[dayCandles.length - 1].time : candleData[candleData.length - 1].time)
 
-          // Bottom boundary line (subtle, no duplicate axis label)
-          candleSeries.createPriceLine({
-            price: sp.low,
-            color: spColor,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            axisLabelVisible: false,
-            title: ''
-          })
+          if (timeRange === '1D') {
+            candleSeries.createPriceLine({
+              price: sp.high,
+              color: spColor,
+              lineWidth: 1,
+              lineStyle: LineStyle.Dashed,
+              axisLabelVisible: true,
+              title: `SP [${sp.bracket}] ${roleShort} ₹${sp.low.toFixed(1)}-${sp.high.toFixed(1)}`
+            })
+
+            candleSeries.createPriceLine({
+              price: sp.low,
+              color: spColor,
+              lineWidth: 1,
+              lineStyle: LineStyle.Dotted,
+              axisLabelVisible: false,
+              title: ''
+            })
+          } else {
+            // In 5D mode, draw day-bounded LineSeries so lines cut cleanly at the end of each session!
+            if (startTs && endTs && dayCandles.length > 0) {
+              const lineHigh = chart.addSeries(LineSeries, {
+                color: spColor,
+                lineWidth: 2,
+                lineStyle: LineStyle.Dashed,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+                title: `SP [${sp.bracket}]`
+              })
+              lineHigh.setData([
+                { time: startTs as any, value: sp.high },
+                { time: endTs as any, value: sp.high }
+              ])
+
+              const lineLow = chart.addSeries(LineSeries, {
+                color: spColor,
+                lineWidth: 1,
+                lineStyle: LineStyle.Dotted,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false
+              })
+              lineLow.setData([
+                { time: startTs as any, value: sp.low },
+                { time: endTs as any, value: sp.low }
+              ])
+            }
+          }
         })
       }
 
@@ -323,7 +378,7 @@ export function IntradayChart({
         chartInstanceRef.current = null
       }
     }
-  }, [profile, series, showOpen, showAbove, showBelow, showCurrent, showSinglePrints])
+  }, [profile, series, timeRange, showOpen, showAbove, showBelow, showCurrent, showSinglePrints])
 
   return (
     <div
@@ -333,6 +388,7 @@ export function IntradayChart({
     />
   )
 }
+
 
 export function MiniSparkline({ series = [] }: { series?: PricePoint[] }) {
   if (series.length < 2) return <span className="spark-placeholder" />

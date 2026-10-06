@@ -227,6 +227,8 @@ def build_volume_profile(symbol: str, bucket: float = 1.0, top_levels: int = 3, 
         "priceSeries": price_series,
         "candles": tv_candles,
         "singlePrints": sp_data.get("zones", []),
+        "allSinglePrints": sp_data.get("all_zones", []),
         "availableDates": sp_data.get("available_dates", []),
         "selectedDate": sp_data.get("selected_date", curr_date)
     }
+
